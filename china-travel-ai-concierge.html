@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>China Travel AI Concierge — RAG Demo</title>
+<style>
+  :root{
+    --ink:#1c1c1a;
+    --paper:#f7f3ea;
+    --panel:#ffffff;
+    --jade:#33513f;
+    --jade-deep:#1f342a;
+    --cinnabar:#a8442f;
+    --line: rgba(28,28,26,0.14);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:-apple-system, "Segoe UI", Inter, sans-serif;
+    line-height:1.5;
+  }
+  .app{
+    max-width:920px;
+    margin:0 auto;
+    padding:28px 20px 60px;
+  }
+  header{margin-bottom:20px;}
+  header h1{
+    font-size:1.5rem;
+    margin:0 0 6px;
+  }
+  header p{
+    margin:0;
+    color:#5a594f;
+    font-size:0.92rem;
+  }
+  .layout{
+    display:grid;
+    grid-template-columns:1.5fr 1fr;
+    gap:20px;
+    align-items:start;
+  }
+  @media (max-width:760px){
+    .layout{grid-template-columns:1fr;}
+  }
+  .chat-panel, .ctx-panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    overflow:hidden;
+  }
+  .chat-log{
+    height:420px;
+    overflow-y:auto;
+    padding:18px;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  .msg{
+    max-width:85%;
+    padding:10px 14px;
+    border-radius:8px;
+    font-size:0.94rem;
+    white-space:pre-wrap;
+  }
+  .msg.user{
+    align-self:flex-end;
+    background:var(--jade);
+    color:var(--paper);
+  }
+  .msg.bot{
+    align-self:flex-start;
+    background:#f1efe6;
+    color:var(--ink);
+    border:1px solid var(--line);
+  }
+  .msg.bot.loading{color:#8a8878; font-style:italic;}
+  .input-row{
+    display:flex;
+    border-top:1px solid var(--line);
+  }
+  .input-row input{
+    flex:1;
+    border:none;
+    padding:14px 16px;
+    font-size:0.95rem;
+    font-family:inherit;
+    outline:none;
+  }
+  .input-row button{
+    border:none;
+    background:var(--cinnabar);
+    color:white;
+    padding:0 22px;
+    font-size:0.9rem;
+    cursor:pointer;
+  }
+  .input-row button:disabled{background:#c9b6ac; cursor:not-allowed;}
+  .examples{
+    padding:10px 18px 16px;
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    border-top:1px solid var(--line);
+  }
+  .example-chip{
+    font-size:0.8rem;
+    background:#f1efe6;
+    border:1px solid var(--line);
+    padding:6px 10px;
+    border-radius:14px;
+    cursor:pointer;
+    color:#3c3b35;
+  }
+  .example-chip:hover{background:#e7e3d6;}
+  .ctx-panel{padding:16px 18px; font-size:0.85rem;}
+  .ctx-panel h3{margin:0 0 4px; font-size:0.95rem;}
+  .ctx-panel .sub{color:#8a8878; margin:0 0 14px; font-size:0.78rem;}
+  .doc{
+    border-left:2px solid var(--jade);
+    padding:6px 0 6px 10px;
+    margin-bottom:10px;
+    color:#3c3b35;
+  }
+  .doc .tag{
+    display:block;
+    font-size:0.72rem;
+    color:var(--jade);
+    margin-bottom:2px;
+  }
+  .empty-ctx{color:#8a8878; font-style:italic;}
+  .tool-call{
+    border-left:2px solid var(--cinnabar);
+    padding:6px 0 6px 10px;
+    margin-bottom:10px;
+    color:#3c3b35;
+  }
+  .tool-call .tname{
+    display:block;
+    font-size:0.72rem;
+    color:var(--cinnabar);
+    margin-bottom:2px;
+  }
+  .tool-call pre{
+    white-space:pre-wrap;
+    font-size:0.78rem;
+    margin:4px 0 0;
+    font-family:ui-monospace, monospace;
+    color:#5a594f;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>China Travel AI Concierge <span style="color:#a8442f;">· RAG demo</span></h1>
+    <p>Ask a question about booking hotels in China as a foreign traveler. The answer is grounded in a small hand-written knowledge base — retrieved documents are shown on the right so you can see the RAG pipeline working.</p>
+    <details style="margin-top:14px; font-size:0.85rem; color:#5a594f;">
+      <summary style="cursor:pointer; color:var(--jade);">Optional: enable live answers outside Claude.ai (e.g. on GitHub Pages)</summary>
+      <p style="margin:8px 0 6px;">Retrieval below runs fully in your browser, no key needed. Generating the final answer calls the Anthropic API directly, which only works without a key inside Claude.ai's own preview. Paste an API key here to enable it anywhere else — it stays in this browser tab only, is never saved, and is never sent anywhere except Anthropic's API.</p>
+      <input id="apiKeyInput" type="password" placeholder="sk-ant-..." style="width:100%; max-width:360px; padding:8px 10px; border:1px solid var(--line); border-radius:4px; font-family:inherit;">
+    </details>
+  </header>
+
+  <div class="layout">
+    <div class="chat-panel">
+      <div class="chat-log" id="chatLog"></div>
+      <div class="input-row">
+        <input id="userInput" type="text" placeholder="e.g. How do I pay for a hotel in Harbin without a Chinese bank card?">
+        <button id="sendBtn">Ask</button>
+      </div>
+      <div class="examples" id="examples"></div>
+    </div>
+    <div class="ctx-panel">
+      <h3>Keyword retrieval <span style="font-weight:400;color:#8a8878;">(before)</span></h3>
+      <p class="sub">Scored by literal word overlap</p>
+      <div id="ctxListKeyword"><p class="empty-ctx">Ask a question to see retrieval in action.</p></div>
+      <h3 style="margin-top:22px;">Embedding retrieval <span style="font-weight:400;color:#8a8878;">(after — real vector search)</span></h3>
+      <p class="sub">Cosine similarity over sentence embeddings, computed locally in your browser — used for the final answer</p>
+      <div id="ctxListSemantic"><p class="empty-ctx">Ask a question to see retrieval in action.</p></div>
+      <h3 style="margin-top:22px;">Agent tool calls</h3>
+      <p class="sub">Claude decides on its own whether to call this</p>
+      <div id="toolTrace"><p class="empty-ctx">Ask a price/budget question to see the agent call a tool.</p></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { pipeline, cos_sim } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+
+// ---- 1. Tiny hand-written knowledge base (this stands in for a real vector DB) ----
+const KB = [
+  { id: "official-deals", tag: "Booking channel · Recommended", text: "Official hotel group-buy deals on Meituan and Douyin are verified directly by the hotel, usually bundled as 2-3 night packages with breakfast for two included, and can run several hundred RMB cheaper than booking the identical room through an international OTA." },
+  { id: "travel-agency", tag: "Booking channel · Recommended", text: "Travel agency mini-programs (such as Baguozhou on WeChat) sell packages like 'pay for 2 nights, stay 3' or 'pay for 3, stay 4', often bundled with dining credit and breakfast for two; the per-night price can look higher than an OTA, but the total package can end up several hundred to a couple thousand RMB cheaper." },
+  { id: "overseas-hk-macau", tag: "Booking channel · Recommended", text: "For overseas or Hong Kong/Macau hotels, official flagship stores on Fliggy, Ctrip, or Taobao (for example a Marriott overseas flagship store) sometimes sell group deals several hundred RMB cheaper than the OTA price, with breakfast and a spending credit included." },
+  { id: "corporate-rate-risk", tag: "Booking channel · High risk", text: "Some resellers book rooms using a large company's negotiated corporate rate (with chains like Marriott or Hyatt), but hotels frequently verify employment at check-in by asking for a work badge or company email, and guests who can't prove it risk being turned away at the front desk." },
+  { id: "loyalty-perk-risk", tag: "Booking channel · Medium risk", text: "Some resellers use their own hotel loyalty status to book on a guest's behalf and pass along perks like free breakfast, but many hotel groups' loyalty terms restrict booking for third parties, so this carries policy risk even though it isn't illegal." },
+  { id: "card-fraud-warning", tag: "Booking channel · Illegal, avoid", text: "A small number of resellers offer suspiciously cheap rooms, especially for overseas hotels, made possible by stolen credit cards; this is illegal, and a guest using such a booking risks having the reservation cancelled or worse." },
+  { id: "casino-keycard", tag: "Booking channel · Low risk, not recommended", text: "In casino-hotel-heavy destinations like Jeju Island or Macau, some resellers pre-open a room and leave the keycard in a delivery locker for pickup; it usually works but offers none of the accountability of an official booking." },
+  { id: "alipay-tourist", tag: "Payment", text: "Since 2023, Alipay and WeChat Pay both offer a 'Tour Pass' / international card binding feature that lets foreign visitors link a Visa, Mastercard or similar card to make mobile payments in China without a Chinese bank account, though daily transaction limits apply." },
+  { id: "checkin-docs", tag: "Logistics", text: "Foreign guests checking into Chinese hotels must present a passport for real-name registration at the front desk; this is required by law even when the room was booked and paid for by someone else on their behalf." },
+  { id: "guangzhou", tag: "City guide", text: "In Guangzhou, the riverside five-star hotels along the Pearl River and the boutique courtyard stays near Yongqing Fang offer some of the best value, especially when booked through an official group-buy deal rather than an international booking site." },
+  { id: "harbin", tag: "City guide", text: "Harbin sees its highest hotel demand during the Ice and Snow Festival (roughly early January to late February), when rooms near Zhongyang Street and ski lodges near Yabuli should be booked at least a month ahead." }
+];
+
+// ---- 2. Very small retriever: keyword overlap scoring (a simplified stand-in for embedding similarity search) ----
+const STOPWORDS = new Set(["the","a","an","is","are","to","for","of","in","on","and","how","do","i","my","can","what","with","without"]);
+
+function tokenize(str){
+  return str.toLowerCase().replace(/[^a-z0-9\s]/g," ").split(/\s+/).filter(w => w && !STOPWORDS.has(w));
+}
+
+function keywordRetrieve(query, k=3){
+  const qWords = tokenize(query);
+  const scored = KB.map(doc => {
+    const dWords = new Set(tokenize(doc.text + " " + doc.tag));
+    let score = 0;
+    qWords.forEach(w => { if(dWords.has(w)) score += 1; });
+    return { doc, score };
+  });
+  return scored.filter(s => s.score > 0).sort((a,b) => b.score - a.score).slice(0,k).map(s => s.doc);
+}
+
+// ---- 2b. Embedding retrieval: a small sentence-embedding model runs fully client-side via
+// transformers.js (WebAssembly, ~25MB download, cached after first load) — cosine similarity
+// over real vectors, the standard production approach to RAG retrieval. No API key needed. ----
+let embedder = null;
+let kbVectors = null;
+
+async function initRetrieval(){
+  embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+  kbVectors = await Promise.all(KB.map(async d => ({ doc: d, vector: await embed(d.text) })));
+}
+
+async function embed(text){
+  const output = await embedder(text, { pooling: 'mean', normalize: true });
+  return Array.from(output.data);
+}
+
+async function embeddingRetrieve(query, k=3, threshold=0.25){
+  if(!embedder || !kbVectors) return keywordRetrieve(query, k);
+  const qVector = await embed(query);
+  const scored = kbVectors.map(({doc, vector}) => ({ doc, score: cos_sim(qVector, vector) }));
+  return scored.filter(s => s.score >= threshold).sort((a,b) => b.score - a.score).slice(0,k).map(s => s.doc);
+}
+
+// ---- 3. Agent tool: a mock hotel-price lookup the model can choose to call ----
+const PRICE_DB = {
+  guangzhou: { low: 550, high: 1100, channel: "Meituan/Douyin official group-buy", peakMultiplier: 1.6, peakKeywords: ["canton fair","golden week"] },
+  harbin:    { low: 480, high: 1300, channel: "Meituan/Douyin official group-buy", peakMultiplier: 2.0, peakKeywords: ["ice festival","ice and snow","winter"] },
+  shanghai:  { low: 700, high: 1800, channel: "Meituan/Douyin official group-buy or Baguozhou package", peakMultiplier: 1.5, peakKeywords: ["golden week","new year"] },
+  default:   { low: 400, high: 1000, channel: "Meituan/Douyin official group-buy", peakMultiplier: 1.5, peakKeywords: ["golden week","new year","festival"] }
+};
+
+// Kept for reference: this is the schema you'd pass as a native `tools` param
+// in a real environment with your own API key (e.g. Claude Code) — this
+// browser demo's proxy doesn't support custom function-calling tools, so the
+// actual call below emulates it via a plain-text JSON protocol instead.
+const TOOLS = [{
+  name: "check_hotel_price",
+  description: "Look up an estimated nightly hotel price range (in RMB) for a Chinese city, optionally adjusted for a seasonal event, plus the recommended legitimate booking channel. Use this whenever the user asks about price, budget, or cost for a specific stay.",
+  input_schema: {
+    type: "object",
+    properties: {
+      city: { type: "string", description: "City name, e.g. 'Harbin' or 'Guangzhou'" },
+      nights: { type: "integer", description: "Number of nights of the stay" },
+      season_note: { type: "string", description: "Optional note about timing, e.g. 'Ice Festival' or 'Golden Week'" }
+    },
+    required: ["city", "nights"]
+  }
+}];
+
+function checkHotelPrice({ city, nights, season_note }){
+  const entry = PRICE_DB[(city || "").toLowerCase()] || PRICE_DB.default;
+  const seasonText = (season_note || "").toLowerCase();
+  const isPeak = entry.peakKeywords.some(k => seasonText.includes(k));
+  const low = isPeak ? Math.round(entry.low * entry.peakMultiplier) : entry.low;
+  const high = isPeak ? Math.round(entry.high * entry.peakMultiplier) : entry.high;
+  return {
+    city, nights,
+    is_peak_season: isPeak,
+    nightly_price_range_rmb: [low, high],
+    estimated_total_rmb: [low * nights, high * nights],
+    recommended_channel: entry.channel,
+    note: isPeak ? "Peak-season pricing — book at least a month ahead." : "Off-peak pricing; more flexibility on timing."
+  };
+}
+
+function renderToolTrace(calls){
+  const el = document.getElementById("toolTrace");
+  if(!calls || calls.length === 0){
+    el.innerHTML = '<p class="empty-ctx">No tool was called for this question.</p>';
+    return;
+  }
+  el.innerHTML = calls.map(c => `
+    <div class="tool-call">
+      <span class="tname">${c.name}(${JSON.stringify(c.input)})</span>
+      <pre>${JSON.stringify(c.result, null, 2)}</pre>
+    </div>
+  `).join("");
+}
+
+// ---- 4. UI wiring ----
+const chatLog = document.getElementById("chatLog");
+const input = document.getElementById("userInput");
+const sendBtn = document.getElementById("sendBtn");
+const examplesEl = document.getElementById("examples");
+
+const EXAMPLES = [
+  "How do I pay for a Meituan hotel without a Chinese bank card?",
+  "How much would 3 nights in Harbin cost during the Ice Festival?",
+  "Is it cheaper to book through Douyin than Ctrip?"
+];
+EXAMPLES.forEach(q => {
+  const chip = document.createElement("div");
+  chip.className = "example-chip";
+  chip.textContent = q;
+  chip.onclick = () => { input.value = q; sendMessage(); };
+  examplesEl.appendChild(chip);
+});
+
+function addMessage(text, role){
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.textContent = text;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
+}
+
+function renderContext(containerId, docs){
+  const el = document.getElementById(containerId);
+  if(docs.length === 0){
+    el.innerHTML = '<p class="empty-ctx">No matching documents found for that question.</p>';
+    return;
+  }
+  el.innerHTML = docs.map(d => `
+    <div class="doc">
+      <span class="tag">${d.tag}</span>
+      ${d.text}
+    </div>
+  `).join("");
+}
+
+async function sendMessage(){
+  const query = input.value.trim();
+  if(!query) return;
+  input.value = "";
+  sendBtn.disabled = true;
+
+  addMessage(query, "user");
+  const loadingMsg = addMessage("Retrieving context and thinking...", "bot loading");
+
+  const keywordDocs = keywordRetrieve(query, 3);
+  renderContext("ctxListKeyword", keywordDocs);
+
+  const semanticDocs = await embeddingRetrieve(query, 3);
+  renderContext("ctxListSemantic", semanticDocs);
+
+  // The embedding-based (real vector) retrieval is the one actually used to ground the final answer.
+  const docs = semanticDocs.length ? semanticDocs : keywordDocs;
+  const contextBlock = docs.map(d => `- (${d.tag}) ${d.text}`).join("\n") || "No relevant documents were retrieved.";
+
+  const systemPrompt = `You are a China Travel AI Concierge for foreign travelers booking hotels in China. Answer using the CONTEXT below plus general helpfulness — if the context doesn't cover something, say so honestly instead of guessing. Keep answers concise (3-5 sentences), practical, and friendly.
+
+Some context documents are tagged with a risk level (Recommended / Medium risk / High risk / Illegal). Only actively recommend channels tagged Recommended. If a riskier channel is relevant to the question, you may mention it exists, but clearly flag the risk, and never recommend or give steps for the one tagged Illegal.
+
+You also have access to a check_hotel_price tool for estimating hotel cost, but this environment has no native function-calling channel, so it is emulated in plain text: if — and only if — the user asks about price, budget, or cost for a specific stay, respond with ONLY this JSON object and nothing else (no other words, no markdown fences):
+{"tool_call": {"name": "check_hotel_price", "input": {"city": "<city>", "nights": <integer>, "season_note": "<optional note, or empty string>"}}}
+For any other question, ignore this tool entirely and just answer normally in plain conversational text.
+
+CONTEXT:
+${contextBlock}`;
+
+  try{
+    const toolCalls = [];
+
+    async function callClaude(messages){
+      const apiKey = document.getElementById("apiKeyInput").value.trim();
+      const headers = { "Content-Type": "application/json" };
+      if(apiKey){
+        headers["x-api-key"] = apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+        headers["anthropic-dangerous-direct-browser-access"] = "true";
+      }
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 500,
+          system: systemPrompt,
+          messages
+        })
+      });
+      const data = await response.json();
+      if(!response.ok){
+        throw new Error(data?.error?.message || `Request failed (${response.status})`);
+      }
+      const textBlock = (data.content || []).find(b => b.type === "text");
+      return textBlock ? textBlock.text : "";
+    }
+
+    let messages = [{ role: "user", content: query }];
+    let reply = await callClaude(messages);
+
+    // Detect the emulated tool-call JSON. If found, execute it locally and ask again with the result.
+    let parsedCall = null;
+    try{
+      const trimmed = reply.trim();
+      if(trimmed.startsWith("{")) parsedCall = JSON.parse(trimmed);
+    } catch(e){ /* not a tool call — treat reply as the final answer */ }
+
+    if(parsedCall && parsedCall.tool_call && parsedCall.tool_call.name === "check_hotel_price"){
+      const result = checkHotelPrice(parsedCall.tool_call.input);
+      toolCalls.push({ name: "check_hotel_price", input: parsedCall.tool_call.input, result });
+
+      messages.push({ role: "assistant", content: reply });
+      messages.push({ role: "user", content: `Tool result: ${JSON.stringify(result)}\n\nNow answer my original question using this data, in plain conversational text (no JSON).` });
+      reply = await callClaude(messages);
+    }
+
+    renderToolTrace(toolCalls);
+    loadingMsg.remove();
+    addMessage(reply || "Sorry, I couldn't generate a response.", "bot");
+  } catch(err){
+    loadingMsg.remove();
+    addMessage("Something went wrong calling the API: " + err.message, "bot");
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
+sendBtn.onclick = sendMessage;
+input.addEventListener("keydown", e => { if(e.key === "Enter") sendMessage(); });
+
+addMessage("Hi! Ask me anything about booking hotels in China as a foreign traveler — try one of the examples below.", "bot");
+
+// Load the embedding model and pre-compute KB vectors before enabling the chat.
+input.disabled = true;
+sendBtn.disabled = true;
+sendBtn.textContent = "Loading model…";
+initRetrieval().then(() => {
+  input.disabled = false;
+  sendBtn.disabled = false;
+  sendBtn.textContent = "Ask";
+}).catch(err => {
+  console.error("Failed to load embedding model:", err);
+  addMessage("The embedding model failed to load, so retrieval will fall back to keyword matching only.", "bot");
+  input.disabled = false;
+  sendBtn.disabled = false;
+  sendBtn.textContent = "Ask";
+});
+</script>
+</body>
+</html>
